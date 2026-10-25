@@ -27,7 +27,7 @@ All tasks start as `Planned`. A task's status will be updated as work progresses
 
 | ID | Feature | Priority | Dependencies | Status |
 |---|---|---|---|---|
-| API-01 | CRUD Operations | Must Learn | None | Planned |
+| API-01 | CRUD Operations | Must Learn | None | Implemented |
 | API-02 | Request Validation with Joi | Must Learn | API-01 | Planned |
 | API-03 | Centralized Error Handling | Must Learn | API-01 | Planned |
 | API-04 | HTTP Status Codes and API Responses | Must Learn | API-01 | Planned |
