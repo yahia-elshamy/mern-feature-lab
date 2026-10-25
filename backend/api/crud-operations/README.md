@@ -1,93 +1,116 @@
-# API-01: CRUD Operations
+# API-02: Request Validation with Joi
 
-A minimal REST API for managing **products**, built with Express 5, MongoDB, and Mongoose. It covers the four basic data operations (Create, Read, Update, Delete) and is the foundation for the later tasks in this repository (validation, pagination, authentication, testing).
+A products REST API (built in [API-01](../api-01-crud-operations/README.md)) extended with **request validation using [Joi](https://joi.dev/api/)**. Incoming request bodies are checked against schemas in a reusable Express middleware before they reach the controllers or the database.
 
 > **Status:** Implemented and manually tested with Postman. Automated tests are planned; see [Known Limitations](#known-limitations).
 
+## Overview
+
+In API-01, validation happened in two places: manual checks inside the controllers and Mongoose schema validators. This task adds a dedicated validation layer at the edge of the API:
+
+- Invalid requests are rejected with `400` before any controller logic or database query runs.
+- All validation errors are returned together in one consistent JSON shape.
+- Unknown fields are removed and string fields are trimmed before the controller receives the body.
+
 ## Learning Objectives
 
-- Design a resource-based REST API with the correct HTTP methods and status codes.
-- Define a Mongoose schema with built-in validators and timestamps.
-- Separate responsibilities into routes, controllers, models, and middleware.
-- Handle async errors with Express 5 and a centralized error-handling middleware.
-- Validate MongoDB `ObjectId` values before querying.
+- Define Joi schemas for create and update operations.
+- Reuse field rules instead of duplicating them (`Joi.object().fork()`).
+- Customize error messages with `.messages()` and the `{#label}` template.
+- Build a reusable middleware with the factory pattern (`validate(schema)`).
+- Understand `abortEarly`, `stripUnknown`, and the structure of `error.details`.
+- Understand why validated data (`value`) must replace `req.body`.
 
 ## Key Concepts
 
-- **CRUD to HTTP mapping:** `POST` creates, `GET` reads, `PATCH` partially updates, `DELETE` removes.
-- **Schema validation:** Mongoose validators (`required`, `min`, `maxlength`, `trim`) enforce data rules at the model level.
-- **Async error handling in Express 5:** rejected promises and errors thrown inside async handlers are forwarded to the error middleware automatically, so no `try/catch` or `next(err)` is needed in controllers.
-- **Centralized error handling:** one middleware returns a consistent JSON error shape.
+- **Schema:** a description of the allowed shape of the data. Fields are optional unless `.required()` is applied.
+- **Validation result:** `schema.validate(data, options)` returns `{ error, value }`. `value` is the cleaned copy (trimmed, unknown keys removed); `error.details` is an array of problems, each with `message`, `path`, and `type`.
+- **Message keys:** custom messages are attached to Joi error types such as `string.empty`, `string.base`, `number.base`, `any.required`, and `object.min`.
+- **Middleware factory:** `validate(schema)` returns the real `(req, res, next)` middleware, so one function can protect any route with any schema.
+- **Defense in depth:** Joi rejects bad input early; Mongoose validators remain as a second layer at the model level.
 
 ## Technologies Used
 
-| Tool | Version (from `package.json`) |
-|------|-------------------------------|
+| Tool | Version |
+|------|---------|
 | Node.js | Not pinned; use a currently supported LTS release |
-| Express | ^5.3.0 |
-| Mongoose | ^9.11.4 |
-| dotenv | ^18.0.9 |
-| nodemon | ^3.1.14 (development) |
+| Express | See `package.json` |
+| Mongoose | See `package.json` |
+| Joi | See `package.json` |
+| dotenv | See `package.json` |
 
 ## Project Structure
 
+New and changed files compared to API-01:
+
 ```
-api-01-crud-operations/
-├── Controllers/
-│   └── productController.js   # CRUD logic
-├── Middlewares/
-│   └── errorMiddleware.js     # Centralized error handler
-├── Models/
-│   └── Product.js             # Mongoose schema and model
-├── Routes/
-│   └── productRoutes.js       # Route definitions
-├── .env.example               # Environment variable placeholders
-├── index.js                   # App entry point and DB connection
-└── package.json
+Middlewares/
+└── validate.js               # NEW: reusable validation middleware
+Validators/
+└── productValidator.js       # NEW: Joi schemas (create and update)
+Routes/
+└── productRoutes.js          # CHANGED: validation middleware added to write routes
 ```
+
+All other files are unchanged from API-01.
 
 ## How It Works
 
-1. `index.js` loads environment variables, registers `express.json()`, mounts the product routes at `/api/products`, and registers the error handler.
-2. The server connects to MongoDB first. If the connection fails, the process exits with code `1`; otherwise it starts listening.
-3. Each route calls a controller, which validates the input, queries MongoDB through the `Product` model, and sends a JSON response.
-4. Any error thrown in a controller reaches `errorMiddleware.js`, which responds with `{ "message": "..." }`.
+1. A request reaches a protected route, for example `POST /api/products`.
+2. `validate(schema)` runs `schema.validate(req.body, { abortEarly: false, stripUnknown: true })`.
+3. If `error` exists, the middleware responds with `400` and a list of all problems. The controller is never called.
+4. Otherwise, `req.body` is replaced with the cleaned `value` and `next()` is called.
+5. The controller receives trimmed data that contains only known fields.
 
-## Data Model
+## Validation Rules
 
-| Field | Type | Rules |
-|-------|------|-------|
-| `name` | String | Required, trimmed, max 100 characters |
-| `price` | Number | Required, minimum `0` |
-| `description` | String | Required, trimmed, 10 to 255 characters |
-| `category` | String | Required |
-| `createdAt`, `updatedAt` | Date | Added automatically (`timestamps: true`) |
+Field rules are defined once in `productFields` and shared by both schemas.
+
+| Field | Rules |
+|-------|-------|
+| `name` | String, trimmed, 3 to 100 characters |
+| `price` | Number, positive (greater than `0`) |
+| `description` | String, trimmed, 10 to 255 characters |
+| `category` | String, trimmed, 2 to 50 characters |
+
+| Schema | Behavior |
+|--------|----------|
+| `createProductSchema` | All four fields are required (applied with `fork()`) |
+| `updateProductSchema` | All fields are optional, but the body must contain at least one key (`object.min(1)`) |
+
+Custom messages are defined for the common error types of each field. The required message uses the `{#label}` template, so it is written once and filled with the field name automatically.
+
+## Middleware Options
+
+| Option | Value | Why |
+|--------|-------|-----|
+| `abortEarly` | `false` | Return every error at once instead of only the first, which is better for form-based clients |
+| `stripUnknown` | `true` | Silently remove fields that are not in the schema (for example a client-supplied `isAdmin`) |
 
 ## API Endpoints
 
 Base path: `/api/products`
 
-| Method | Endpoint | Description | Success |
-|--------|----------|-------------|---------|
-| `POST` | `/api/products` | Create a product | `201` |
-| `GET` | `/api/products` | List all products | `200` |
-| `GET` | `/api/products/:id` | Get one product | `200` |
-| `PATCH` | `/api/products/:id` | Partially update a product | `200` |
-| `DELETE` | `/api/products/:id` | Delete a product | `200` |
+| Method | Endpoint | Validation |
+|--------|----------|------------|
+| `POST` | `/api/products` | Body validated with `createProductSchema` |
+| `GET` | `/api/products` | None |
+| `GET` | `/api/products/:id` | `ObjectId` check in the controller |
+| `PATCH` | `/api/products/:id` | Body validated with `updateProductSchema` |
+| `DELETE` | `/api/products/:id` | `ObjectId` check in the controller |
 
 ### Request and Response Examples
 
-Response bodies follow the structure used in the controllers. `<objectId>` and `<date>` are placeholders.
+The message texts below come from the custom messages in the validator. `{#label}` messages include the field name in quotes, as Joi renders it.
 
-**Create a product**
+**Create with multiple problems**
 
 ```http
 POST /api/products
 Content-Type: application/json
 
 {
-  "name": "Wireless Mouse",
-  "price": 25.5,
+  "price": "abc",
   "description": "Ergonomic wireless mouse with USB receiver",
   "category": "Accessories"
 }
@@ -95,113 +118,104 @@ Content-Type: application/json
 
 ```json
 {
-  "message": "Product created successfully",
-  "data": {
-    "_id": "<objectId>",
-    "name": "Wireless Mouse",
-    "price": 25.5,
-    "description": "Ergonomic wireless mouse with USB receiver",
-    "category": "Accessories",
-    "createdAt": "<date>",
-    "updatedAt": "<date>"
-  }
+  "message": "Validation failed",
+  "errors": [
+    { "field": "name", "message": "\"name\" is required" },
+    { "field": "price", "message": "price must be a valid numbers" }
+  ]
 }
 ```
 
-**List products**
-
-```json
-{
-  "message": "Products founded",
-  "count": 1,
-  "data": [ { "_id": "<objectId>", "name": "Wireless Mouse", "...": "..." } ]
-}
-```
-
-**Update a product**
+**Update with an empty body**
 
 ```http
 PATCH /api/products/<objectId>
 Content-Type: application/json
 
-{ "price": 19.99 }
+{}
 ```
-
-**Error response (all endpoints)**
 
 ```json
-{ "message": "Product not found" }
+{
+  "message": "Validation failed",
+  "errors": [
+    { "field": "", "message": "you must update at least one field" }
+  ]
+}
 ```
+
+The `field` is empty because this error belongs to the whole object, not to a specific key.
+
+**Valid update**
+
+```http
+PATCH /api/products/<objectId>
+Content-Type: application/json
+
+{ "price": 19.99, "isAdmin": true }
+```
+
+`isAdmin` is not in the schema, so it is removed before the controller runs. Successful responses are unchanged from API-01.
 
 ## Validation and Error Handling
 
 | Case | Status | Handled by |
 |------|--------|------------|
-| Missing required field on create (`price: 0` is accepted) | `400` | Controller |
-| Malformed `:id` (`ObjectId.isValid` fails) | `400` | Controller |
+| Joi schema violation on create or update | `400` | `validate` middleware |
+| Empty body on update | `400` | `validate` middleware (`object.min`) |
+| Malformed `:id` | `400` | Controller (`ObjectId.isValid`) |
 | Valid `:id` that matches no document | `404` | Controller |
-| Mongoose `ValidationError` (for example a negative price) | `400` | Error middleware |
-| Mongoose `CastError` | `400` | Error middleware |
-| Any other unexpected error | `500` | Error middleware |
+| Mongoose `ValidationError` or `CastError` | `400` | Error middleware |
+| Unexpected errors | `500` | Error middleware |
 
-- On update, `runValidators: true` makes Mongoose validate the changed fields, and `new: true` returns the updated document.
-- For `ValidationError`, the messages of all invalid fields are joined into a single `message`.
-- For `500` errors, the real error is logged on the server with `console.error`, and the client receives only `"Internal server error"` so internal details are not leaked.
+Validation failures from Joi return `{ "message": "Validation failed", "errors": [...] }`. Other errors still return `{ "message": "..." }` as in API-01.
 
 ## Security Considerations
 
-- The `.env` file is excluded through `.gitignore`; only `.env.example` with placeholders is committed.
-- Input is validated at the boundary (required fields, ID format, schema rules).
-- This API has **no authentication or authorization**. It is intended as a learning example and must not be exposed publicly as is. Authentication is covered in later tasks.
+- Input is validated at the system boundary, before reaching business logic or the database.
+- `stripUnknown` prevents unexpected fields from reaching the controller (a basic defense against mass-assignment style attacks).
+- The cleaned `value` replaces `req.body`, so the controller never works with the raw input.
+- Client-side validation is not trusted; validation always runs on the server.
+- This API still has **no authentication or authorization**. It is a learning example and must not be exposed publicly as is.
 
 ## Setup and Usage
 
-**Prerequisites:** Node.js (LTS) and a running MongoDB instance (local or hosted).
+Setup is the same as API-01, with one extra dependency:
 
 ```bash
-# 1. Install dependencies
 npm install
-
-# 2. Create your environment file
+npm install joi
 cp .env.example .env
-
-# 3. Start the development server
 npm run dev
 ```
 
-Test the endpoints with Postman, Thunder Client, or `curl`.
-
-### Environment Variables
-
-| Variable | Description | Example placeholder |
-|----------|-------------|---------------------|
-| `PORT` | Port the server listens on (defaults to `5000` if unset) | `3000` |
-| `MONGO_URI` | MongoDB connection string. Include a database name, otherwise MongoDB uses the default `test` database | `mongodb://localhost:27017/<database-name>` |
+Environment variables (`PORT`, `MONGO_URI`) are unchanged. Use placeholders only in `.env.example`.
 
 ## Testing
 
-The endpoints were tested manually with Postman by the author. No automated tests are included yet; they are planned in a later task.
+The endpoints were tested manually with Postman, including valid requests, missing required fields, wrongly typed values, empty strings, unknown fields, and an empty update body. No automated tests are included yet.
 
 ## Known Limitations
 
-- **No explicit whitelist on update:** `PATCH` passes `req.body` directly to `findByIdAndUpdate`. Mongoose's default strict mode ignores fields that are not in the schema, but an explicit allow-list would make the intent clearer.
-- **No pagination, filtering, or sorting** on the list endpoint.
-- **No automated tests.**
-- Some response messages are inconsistent in wording and capitalization (for example `"Products founded"` and `"product found"`).
+- **Only `req.body` is validated.** `req.params` (the `:id`) and `req.query` are not validated with Joi yet; the `ObjectId` check still lives in the controllers.
+- **Two error shapes:** validation errors return `{ message, errors }`, while other errors return `{ message }`.
+- **`price` boundary mismatch:** Joi requires `price > 0`, while the Mongoose model still allows `0`. Joi is stricter, so a price of `0` is rejected at the API.
+- **Unknown fields are removed silently.** The client is not told that a field was ignored.
+- No maximum or precision limit on `price`.
+- No automated tests.
 
 ## Future Improvements
 
-- Add pagination, filtering, and sorting (see the search and pagination task in the roadmap).
-- Add request validation with a dedicated schema validator.
-- Add automated tests (Jest and Supertest).
-- Move `nodemon` to `devDependencies` and add a `start` script.
-- Add a custom error class that carries its own status code.
+- Validate `req.params` and `req.query` with the same middleware (for example, by passing the request part to validate as a parameter).
+- Unify error responses across the validation and error middlewares.
+- Align the Mongoose `price` rule with the Joi rule.
+- Add automated tests with Jest and Supertest.
+- Evaluate whether unknown fields should be rejected instead of stripped.
 
 ## References
 
-- [Express 5: Error Handling](https://expressjs.com/en/guide/error-handling.html)
-- [Express: Routing](https://expressjs.com/en/guide/routing.html)
+- [Joi API Reference](https://joi.dev/api/)
+- [Express: Writing Middleware](https://expressjs.com/en/guide/writing-middleware.html)
+- [Express: Error Handling](https://expressjs.com/en/guide/error-handling.html)
 - [Mongoose: Validation](https://mongoosejs.com/docs/validation.html)
-- [Mongoose: Models and `findByIdAndUpdate`](https://mongoosejs.com/docs/api/model.html)
 - [MDN: HTTP response status codes](https://developer.mozilla.org/en-US/docs/Web/HTTP/Status)
-- [MDN: HTTP request methods](https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods)

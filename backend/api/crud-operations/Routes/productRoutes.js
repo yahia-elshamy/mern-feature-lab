@@ -2,12 +2,17 @@
 const express = require("express");
 const router = express.Router();
 
+// require joi validator middleware
+const validate = require("../Middlewares/validate");
+// require the schema for the validators middleware
+const {createProductSchema, updateProductSchema} = require("../Validators/productValidator");
+
 // require the product controller file
 const {createProduct, getAllProducts, getProductById, updateProduct, deleteProduct} = require("../Controllers/productController");
 
 // create the route for the operations
-router.post("/", createProduct);
-router.patch("/:id", updateProduct);
+router.post("/", validate(createProductSchema), createProduct);
+router.patch("/:id", validate(updateProductSchema), updateProduct);
 router.get("/", getAllProducts);
 router.get("/:id", getProductById);
 router.delete("/:id", deleteProduct);
